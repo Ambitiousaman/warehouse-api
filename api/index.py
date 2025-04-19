@@ -11,9 +11,9 @@ PRODUCT_WEIGHTS = {
 
 # Center locations and distances
 DISTANCES = {
-    'C1': {'L1': 3},
-    'C2': {'L1': 2},
-    'C3': {'L1': 3},
+    'C1_L1': 3,
+    'C2_L1': 2,
+    'C3_L1': 3,
     'C1_C2': 4,
     'C1_C3': 2.5,
     'C2_C3': 3
@@ -26,103 +26,52 @@ PRODUCT_LOCATIONS = {
     'G': 'C3', 'H': 'C3', 'I': 'C3'
 }
 
-def calculate_delivery_cost(total_weight, distance):
-    base_cost = min(total_weight, 5) * 10 * distance
-    if total_weight > 5:
-        additional_weight = total_weight - 5
-        additional_cost = additional_weight * 8 * distance
-        return base_cost + additional_cost
-    return base_cost
-
-@app.route('/')
-def home():
-    return jsonify({
-        "message": "Warehouse Cost Calculator API",
-        "endpoints": {
-            "calculate_cost": "/api/calculate-cost"
-        }
-    })
+def calculate_cost_per_distance(weight):
+    base_weight = min(weight, 5)
+    extra_weight = max(0, weight - 5)
+    return (base_weight * 10) + (extra_weight * 8)
 
 @app.route('/api/calculate-cost', methods=['POST'])
 def calculate_cost():
     try:
         order = request.get_json()
-        if not order:
-            return jsonify({"error": "No order data provided"}), 400
         
-        # Calculate total weight and group products by center
+        # Calculate weights per center
         center_weights = {'C1': 0, 'C2': 0, 'C3': 0}
-        total_weight = 0
-        
         for product, quantity in order.items():
-            if product not in PRODUCT_WEIGHTS:
-                return jsonify({"error": f"Invalid product: {product}"}), 400
-            if not isinstance(quantity, (int, float)) or quantity < 0:
-                return jsonify({"error": f"Invalid quantity for product {product}"}), 400
-            
             weight = PRODUCT_WEIGHTS[product] * quantity
             center = PRODUCT_LOCATIONS[product]
             center_weights[center] += weight
-            total_weight += weight
 
-        # Calculate minimum cost for different routing possibilities
+        # Get active centers
+        active_centers = [c for c, w in center_weights.items() if w > 0]
+        
         min_cost = float('inf')
         
-        # Direct delivery from each center if it has all products
-        for center, weight in center_weights.items():
-            if weight == total_weight:
-                cost = calculate_delivery_cost(weight, DISTANCES[center]['L1'])
-                min_cost = min(min_cost, cost)
-
-        # Calculate costs for different routing combinations
-        centers_with_products = [c for c, w in center_weights.items() if w > 0]
-        
-        if len(centers_with_products) > 1:
-            # Try all possible routes starting from each center
-            for start_center in centers_with_products:
-                route_cost = 0
-                remaining_weight = total_weight
-                
-                # Cost to deliver from start center to L1
-                route_cost += calculate_delivery_cost(
-                    center_weights[start_center],
-                    DISTANCES[start_center]['L1']
-                )
-                remaining_weight -= center_weights[start_center]
-                
-                # Add costs for picking up from other centers
-                for other_center in centers_with_products:
-                    if other_center != start_center:
-                        center_distance = DISTANCES.get(
-                            f"{start_center}_{other_center}",
-                            DISTANCES.get(f"{other_center}_{start_center}")
-                        )
-                        if center_distance:
-                            route_cost += calculate_delivery_cost(
-                                remaining_weight,
-                                center_distance
-                            )
-                            remaining_weight -= center_weights[other_center]
-                            route_cost += calculate_delivery_cost(
-                                remaining_weight,
-                                DISTANCES[other_center]['L1']
-                            )
-                
-                min_cost = min(min_cost, route_cost)
+        # Try each center as starting point
+        for start_center in active_centers:
+            total_weight = sum(center_weights.values())
+            current_cost = 0
+            
+            # Cost from start center to L1
+            current_cost += calculate_cost_per_distance(center_weights[start_center]) * DISTANCES[f'{start_center}_L1']
+            
+            remaining_centers = [c for c in active_centers if c != start_center]
+            
+            # Add costs for other centers
+            for next_center in remaining_centers:
+                # Cost to go to next center
+                between_distance = DISTANCES.get(f'{start_center}_{next_center}', DISTANCES.get(f'{next_center}_{start_center}'))
+                current_cost += calculate_cost_per_distance(center_weights[next_center]) * between_distance
+                # Cost to deliver to L1
+                current_cost += calculate_cost_per_distance(center_weights[next_center]) * DISTANCES[f'{next_center}_L1']
+            
+            min_cost = min(min_cost, current_cost)
 
         return jsonify({"minimum_cost": round(min_cost)})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-# Add error handlers
-@app.errorhandler(404)
-def not_found(e):
-    return jsonify({"error": "Route not found"}), 404
-
-@app.errorhandler(500)
-def server_error(e):
-    return jsonify({"error": "Internal server error"}), 500
-
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run()
